@@ -1,18 +1,16 @@
 import json
 import os
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
 DATA_FILE = "cosmetics_data.json"
 
-VALID_SLOTS = {
-    "CAPE",
-    "HAT",
-    "WINGS",
-    "TRAIL",
-    "PARTICLES"
-}
+VALID_SLOTS = {"CAPE", "HAT", "WINGS", "TRAIL", "PARTICLES"}
 
+
+# -------------------------
+# DATA HANDLING
+# -------------------------
 
 def load_data():
     if os.path.exists(DATA_FILE):
@@ -32,54 +30,51 @@ def save_data(data):
 cosmetics_data = load_data()
 
 
+# -------------------------
+# HTTP SERVER
+# -------------------------
+
 class CosmeticsHandler(BaseHTTPRequestHandler):
 
     def send_json(self, obj, status=200):
         body = json.dumps(obj).encode("utf-8")
-
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-
         self.wfile.write(body)
 
     def do_GET(self):
         parsed = urlparse(self.path)
 
-        # GET /health
+        # HEALTH CHECK
         if parsed.path == "/health":
-            self.send_json({
+            return self.send_json({
                 "status": "ok",
                 "players": len(cosmetics_data)
             })
-            return
 
-        # GET /cosmetics/batch?ids=uuid1,uuid2,...
+        # BATCH REQUEST
         if parsed.path == "/cosmetics/batch":
             query = parse_qs(parsed.query)
-
             ids = query.get("ids", [""])[0].split(",")
 
             result = {}
-
             for uuid in ids:
                 uuid = uuid.strip()
-                if uuid and uuid in cosmetics_data:
+                if uuid in cosmetics_data:
                     result[uuid] = cosmetics_data[uuid]
 
-            self.send_json(result)
-            return
+            return self.send_json(result)
 
-        self.send_json({"error": "Not Found"}, 404)
+        return self.send_json({"error": "Not Found"}, 404)
 
     def do_POST(self):
         parsed = urlparse(self.path)
 
-        # POST /cosmetics/<uuid>
+        # SAVE COSMETICS
         if parsed.path.startswith("/cosmetics/"):
-
-            uuid = parsed.path[len("/cosmetics/"):]
+            uuid = parsed.path.split("/")[-1]
 
             length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(length)
@@ -87,31 +82,34 @@ class CosmeticsHandler(BaseHTTPRequestHandler):
             try:
                 received = json.loads(body.decode("utf-8"))
             except json.JSONDecodeError:
-                self.send_json({"error": "Invalid JSON"}, 400)
-                return
+                return self.send_json({"error": "Invalid JSON"}, 400)
+
+            if not isinstance(received, dict):
+                return self.send_json({"error": "Body must be JSON object"}, 400)
 
             filtered = {}
-
             for slot, cosmetic in received.items():
-                if slot in VALID_SLOTS:
+                if slot in VALID_SLOTS and isinstance(cosmetic, str):
                     filtered[slot] = cosmetic
 
             cosmetics_data[uuid] = filtered
             save_data(cosmetics_data)
 
-            self.send_json({"success": True})
-            return
+            print(f"[SAVE] {uuid} -> {filtered}")
 
-        self.send_json({"error": "Not Found"}, 404)
+            return self.send_json({"success": True})
 
+        return self.send_json({"error": "Not Found"}, 404)
+
+
+# -------------------------
+# START SERVER
+# -------------------------
 
 def main():
     port = int(os.environ.get("PORT", 8080))
-
     server = HTTPServer(("0.0.0.0", port), CosmeticsHandler)
-
-    print(f"Cosmetics server in ascolto sulla porta {port}")
-
+    print(f"[CosmeticsServer] running on port {port}")
     server.serve_forever()
 
 
